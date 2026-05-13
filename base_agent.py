@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
-from .memory import ConversationMemory
 
 class BaseAgent(ABC):
     def __init__(self) -> None:
-        self.memory = ConversationMemory()
+        pass
 
     @abstractmethod
     def chat(self, user_input: str) -> str:
@@ -14,7 +13,4 @@ class BaseAgent(ABC):
         pass
 
     def reset(self) -> None:
-        self.memory.clear()
-
-    def get_history_length(self) -> int:
-        return len(self.memory) // 2
+        pass
