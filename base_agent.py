@@ -5,12 +5,10 @@ class BaseAgent(ABC):
         pass
 
     @abstractmethod
-    def chat(self, user_input: str) -> str:
-        pass
-
-    @abstractmethod
-    def _build_response(self, user_input: str) -> str:
+    def stream_chat(self, user_input: str):
+        """流式聊天接口，由子类实现"""
         pass
 
     def reset(self) -> None:
+        """重置 Agent 状态"""
         pass

@@ -45,9 +45,10 @@ def run_cli():
             continue
 
         try:
-            print("助教：思考中...", end="\r")
-            reply = agent.chat(user_input)
-            print(f"助教：{reply}\n")
+            print("助教：", end="", flush=True)
+            for chunk in agent.stream_chat(user_input):
+                print(chunk, end="", flush=True)
+            print("\n")
         except Exception as e:
             print(f"\n[错误] {e}\n")
 
