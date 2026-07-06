@@ -97,6 +97,21 @@ class HybridSearcher:
             })
         self.bm25_retriever.add_documents(bm25_docs)
 
+    def clear_all(self):
+        """
+        清空所有索引（向量库和 BM25）
+        """
+        logger.info("正在清空所有 RAG 索引...")
+        # 1. 清空向量库
+        vector_repo.clear_collection()
+        
+        # 2. 清空 BM25
+        self.bm25_retriever.corpus = []
+        self.bm25_retriever.bm25 = None
+        if os.path.exists(self.bm25_retriever.storage_path):
+            os.remove(self.bm25_retriever.storage_path)
+        logger.info("所有 RAG 索引已清空")
+
     def query(self, question: str, top_k: int = None) -> List[Dict[str, Any]]:
         if top_k is None:
             top_k = settings.TOP_K

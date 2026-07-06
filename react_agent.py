@@ -30,6 +30,7 @@ class ReactAgent(BaseAgent):
         )
         self.tools = {t.name: t for t in tools}
         self.max_iterations = 5
+        self.last_observations = [] # 新增：记录最近一次对话的观察结果
 
     def stream_chat(self, user_input: str):
         user_input = user_input.strip()
@@ -37,6 +38,7 @@ class ReactAgent(BaseAgent):
             yield "请输入你的问题～"
             return
 
+        self.last_observations = [] # 重置记录
         logger.info(f"收到用户输入: {user_input}")
         try:
             yield from self._build_stream_response(user_input)
@@ -68,14 +70,17 @@ class ReactAgent(BaseAgent):
             thought, action, action_input, final_answer = self._parse_output(response_text)
             
             if final_answer:
-                for char in final_answer:
-                    yield char
+                chunk_size = 8
+                for i in range(0, len(final_answer), chunk_size):
+                    yield final_answer[i:i + chunk_size]
                 return
             
             if action:
                 if action in self.tools:
                     try:
                         observation = self.tools[action].run(action_input)
+                        if action == "query_lecture_knowledge":
+                            self.last_observations.append(observation)
                     except Exception as e:
                         observation = f"执行工具时出错: {str(e)}"
                 else:
