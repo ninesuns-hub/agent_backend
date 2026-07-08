@@ -14,13 +14,22 @@ def create_knowledge_tool(vector_query_func):
             logger.warning("知识库查询未找到结果")
             return "在课件资料中未找到相关知识点。"
         
-        # 格式化 Observation，让模型知道来源
+        # 格式化 Observation，让模型知道可引用来源和正文片段
         formatted_results = []
-        for r in results:
+        for idx, r in enumerate(results, start=1):
             score_info = f"相似度：{r['similarity']}" if 'similarity' in r and r['similarity'] > 0 else f"综合得分：{r.get('rrf_score', 'N/A')}"
-            source = f"【来源：{r['source_file']} 第{r['page']}页，{score_info}】"
-            content = f"内容：{r['text']}"
-            formatted_results.append(f"{source}\n{content}")
+            source_file = r.get("source_file", "未知资料")
+            page = r.get("page", "未知页码")
+            content = r.get("text", "")
+            formatted_results.append(
+                "\n".join([
+                    f"### 检索片段 {idx}",
+                    f"- 可引用来源：{source_file}，第 {page} 页",
+                    f"- 检索得分：{score_info}",
+                    "- 片段内容：",
+                    content,
+                ])
+            )
         
         output = "\n\n".join(formatted_results)
         logger.info(f"知识库查询返回 {len(formatted_results)} 条结果")
