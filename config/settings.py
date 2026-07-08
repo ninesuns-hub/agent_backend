@@ -13,11 +13,39 @@ class Settings(BaseSettings):
     EMBED_BASE_URL: str
     EMBED_MODEL_NAME: str
     
+    # ── 视觉识图 API（默认复用 EMBED 网关，需支持 vision 的模型）──
+    VISION_API_KEY: str = ""
+    VISION_BASE_URL: str = ""
+    VISION_MODEL_NAME: str = "gpt-4o-mini"
+    
     # ── 向量数据库配置 (Qdrant) ──
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION_NAME: str = "discrete_math_materials"
     QDRANT_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "storage", "processed", "vector_db")
+
+    # ── MySQL 配置 ──
+    MYSQL_HOST: str = "localhost"
+    MYSQL_PORT: int = 3306
+    MYSQL_USER: str = "root"
+    MYSQL_PASSWORD: str = "L15834556205"
+    MYSQL_DB: str = "Discrete"
+
+    # ── Redis 配置 ──
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+
+    # ── 鉴权配置 ──
+    JWT_SECRET: str = "discrete_math_secret_key_2026"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+
+    # ── 邮箱配置 ──
+    SMTP_HOST: str = "smtp.qq.com"
+    SMTP_PORT: int = 465
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
 
     # ── 系统提示词 ──
     SYSTEM_PROMPT: str = r"""你是一名离散数学课程的智能助教，名字叫"小离"。
@@ -38,6 +66,8 @@ class Settings(BaseSettings):
     # 原始资产目录
     RAW_DIR: str = os.path.join(STORAGE_DIR, "raw")
     COURSE_ASSETS_DIR: str = os.path.join(RAW_DIR, "courses")
+    CLASS_MATERIALS_DIR: str = os.path.join(RAW_DIR, "classes")
+    CHAT_IMAGES_DIR: str = os.path.join(RAW_DIR, "chat_images")
     
     # 知识处理目录 (RAG)
     PROCESSED_DIR: str = os.path.join(STORAGE_DIR, "processed")
