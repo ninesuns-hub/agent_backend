@@ -35,7 +35,8 @@ def _resolve_image_path(image_path: str) -> str:
 def analyze_uploaded_image(image_path: str, user_question: str = "") -> str:
     api_key = settings.VISION_API_KEY or settings.EMBED_API_KEY
     base_url = settings.VISION_BASE_URL or settings.EMBED_BASE_URL
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # 识图常带较大 base64，默认超时偏短，容易在网关侧超时
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=90.0)
 
     try:
         abs_path = _resolve_image_path(image_path)
@@ -46,22 +47,41 @@ def analyze_uploaded_image(image_path: str, user_question: str = "") -> str:
     mime, _ = mimetypes.guess_type(abs_path)
     mime = mime or "image/jpeg"
     with open(abs_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
+        raw = f.read()
+        b64 = base64.b64encode(raw).decode("utf-8")
 
     question_hint = user_question.strip() or "请分析这张图片中的离散数学相关内容。"
     user_content = [
         {"type": "text", "text": f"{GRAPH_PROMPT}\n\n学生附言：{question_hint}"},
-        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime};base64,{b64}",
+                "detail": "auto",
+            },
+        },
     ]
+
+    model = settings.VISION_MODEL_NAME
+    logger.info(
+        "识图请求: model=%s base_url=%s size=%dKB path=%s",
+        model,
+        base_url,
+        max(1, len(raw) // 1024),
+        image_path,
+    )
 
     try:
         response = client.chat.completions.create(
-            model=settings.VISION_MODEL_NAME,
+            model=model,
             messages=[{"role": "user", "content": user_content}],
             max_tokens=1200,
             temperature=0.2,
         )
         return (response.choices[0].message.content or "").strip()
     except Exception as e:
-        logger.error(f"图片理解失败: {e}")
-        return f"图片识别暂时不可用（{e}）。请尝试用文字描述题目，或稍后重试。"
+        logger.error(f"图片理解失败 (model={model}, base_url={base_url}): {e}")
+        return (
+            f"图片识别暂时不可用（{e}）。"
+            "当前多模态请求超时或网关无响应，请稍后重试，或改用文字描述题目。"
+        )

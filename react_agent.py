@@ -56,11 +56,13 @@ class ReactAgent(BaseAgent):
 
         for i in range(self.max_iterations):
             logger.debug(f"开始第 {i+1} 轮迭代")
-            prompt = REACT_PROMPT.format(
-                input=user_input,
-                tool_names=tool_names,
-                tool_descriptions=tool_descriptions,
-                agent_scratchpad=scratchpad
+            # 不用 str.format：scratchpad/用户输入里常有 LaTeX {bmatrix} 等花括号，会触发 KeyError
+            prompt = (
+                REACT_PROMPT
+                .replace("{input}", user_input)
+                .replace("{tool_names}", tool_names)
+                .replace("{tool_descriptions}", tool_descriptions)
+                .replace("{agent_scratchpad}", scratchpad)
             )
 
             response_text = self._call_llm(prompt)

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # ── 视觉识图 API（默认复用 EMBED 网关，需支持 vision 的模型）──
     VISION_API_KEY: str = ""
     VISION_BASE_URL: str = ""
-    VISION_MODEL_NAME: str = "gpt-4o-mini"
+    VISION_MODEL_NAME: str = "gpt-4o"
     
     # ── 向量数据库配置 (Qdrant) ──
     QDRANT_HOST: str = "localhost"
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 你的职责：
 - 耐心解答学生关于离散数学的各种问题。
 - 解释概念时先给结论，再举例说明，保持简洁清晰。
-- 回答可以使用标准 Markdown 排版；数学表达请使用标准 LaTeX，行内公式使用 `$...$`，块级公式使用 `$$...$$`。
+- 回答可以使用标准 Markdown 排版；数学表达请使用标准 LaTeX，行内公式使用 `$...$`，块级公式使用 `$$...$$`。禁止用方括号 `[...]` 包裹公式。矩阵换行请写 `\\\\`。
 - 如果需要画集合关系、Hasse 图、树、图论结构或流程图，优先输出 fenced Mermaid 代码块，例如 ```mermaid。
 - **注意：课程课件内容主要是英文。当学生用中文提问时，请自动将其转化为英文关键词进行检索，并在回答时将课件中的英文术语翻译为中文。**
 - 如果通过工具检索到了课件内容，请优先基于课件内容回答；如果检索不到，请基于你掌握的通用离散数学知识回答，并礼貌说明这是通用定义。
@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     RAW_DIR: str = os.path.join(STORAGE_DIR, "raw")
     COURSE_ASSETS_DIR: str = os.path.join(RAW_DIR, "courses")
     CLASS_MATERIALS_DIR: str = os.path.join(RAW_DIR, "classes")
+    HOMEWORK_DIR: str = os.path.join(RAW_DIR, "homework")
     CHAT_IMAGES_DIR: str = os.path.join(RAW_DIR, "chat_images")
     
     # 知识处理目录 (RAG)
