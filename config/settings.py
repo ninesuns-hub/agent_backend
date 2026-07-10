@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     CLASS_MATERIALS_DIR: str = os.path.join(RAW_DIR, "classes")
     HOMEWORK_DIR: str = os.path.join(RAW_DIR, "homework")
     CHAT_IMAGES_DIR: str = os.path.join(RAW_DIR, "chat_images")
+    HOMEWORK_DIR: str = os.path.join(RAW_DIR, "homework")
     
     # 知识处理目录 (RAG)
     PROCESSED_DIR: str = os.path.join(STORAGE_DIR, "processed")
