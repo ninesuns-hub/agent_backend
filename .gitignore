@@ -4,6 +4,9 @@ __pycache__/
 *.pyo
 *.pyd
 
+# config
+config/.env
+
 # IDEs
 .vscode/
 .idea/
