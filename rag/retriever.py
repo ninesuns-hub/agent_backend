@@ -3,6 +3,7 @@ import json
 import logging
 import jieba
 import uuid
+import time
 from rank_bm25 import BM25Okapi
 from typing import List, Dict, Any
 from ..config.settings import settings
@@ -14,6 +15,8 @@ class BM25Retriever:
     def __init__(self, storage_path: str):
         self.storage_path = storage_path
         self.corpus = []  # List of dicts: {"id": str, "text": str, "metadata": dict}
+        self._tokenized_corpus: List[List[str]] = []
+        self._scope_cache: Dict[tuple[str, ...], tuple[List[Dict[str, Any]], Any]] = {}
         self.bm25 = None
         self._load()
 
@@ -25,10 +28,24 @@ class BM25Retriever:
         if os.path.exists(self.storage_path):
             try:
                 with open(self.storage_path, 'r', encoding='utf-8') as f:
-                    self.corpus = json.load(f)
+                    payload = json.load(f)
+                needs_migration = not isinstance(payload, dict)
+                if isinstance(payload, dict):
+                    self.corpus = payload.get("documents", [])
+                    self._tokenized_corpus = payload.get("tokenized_documents", [])
+                else:
+                    # Backward compatibility with the original list-only store.
+                    self.corpus = payload
+                    self._tokenized_corpus = []
                 if self.corpus:
-                    tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
-                    self.bm25 = BM25Okapi(tokenized_corpus)
+                    if len(self._tokenized_corpus) != len(self.corpus):
+                        self._tokenized_corpus = [
+                            self._tokenize(doc["text"]) for doc in self.corpus
+                        ]
+                        needs_migration = True
+                    self.bm25 = BM25Okapi(self._tokenized_corpus)
+                if needs_migration:
+                    self._save()
                 logger.info(f"Loaded BM25 corpus from {self.storage_path}, size: {len(self.corpus)}")
             except Exception as e:
                 logger.error(f"Failed to load BM25 corpus: {e}")
@@ -38,7 +55,16 @@ class BM25Retriever:
         try:
             os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
             with open(self.storage_path, 'w', encoding='utf-8') as f:
-                json.dump(self.corpus, f, ensure_ascii=False, indent=2)
+                json.dump(
+                    {
+                        "version": 2,
+                        "documents": self.corpus,
+                        "tokenized_documents": self._tokenized_corpus,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
             logger.info(f"Saved BM25 corpus to {self.storage_path}")
         except Exception as e:
             logger.error(f"Failed to save BM25 corpus: {e}")
@@ -53,28 +79,37 @@ class BM25Retriever:
             if doc.get("metadata", {}).get("document_hash")
         }
         if hashes:
-            self.corpus = [
-                doc for doc in self.corpus
+            retained = [
+                (doc, tokens)
+                for doc, tokens in zip(self.corpus, self._tokenized_corpus)
                 if doc.get("metadata", {}).get("document_hash") not in hashes
             ]
+            self.corpus = [doc for doc, _ in retained]
+            self._tokenized_corpus = [tokens for _, tokens in retained]
         self.corpus.extend(documents)
-        tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
-        self.bm25 = BM25Okapi(tokenized_corpus)
+        self._tokenized_corpus.extend([
+            self._tokenize(doc["text"]) for doc in documents
+        ])
+        self.bm25 = BM25Okapi(self._tokenized_corpus)
+        self._scope_cache.clear()
         self._save()
 
     def delete_material_documents(self, class_id: int, material_id: int):
-        self.corpus = [
-            doc for doc in self.corpus
+        retained = [
+            (doc, tokens)
+            for doc, tokens in zip(self.corpus, self._tokenized_corpus)
             if not (
                 doc.get("metadata", {}).get("class_id") == class_id
                 and doc.get("metadata", {}).get("material_id") == material_id
             )
         ]
+        self.corpus = [doc for doc, _ in retained]
+        self._tokenized_corpus = [tokens for _, tokens in retained]
         if self.corpus:
-            tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
-            self.bm25 = BM25Okapi(tokenized_corpus)
+            self.bm25 = BM25Okapi(self._tokenized_corpus)
         else:
             self.bm25 = None
+        self._invalidate_scope_cache([f"class:{class_id}"])
         self._save()
 
     def update_document_access(
@@ -84,27 +119,43 @@ class BM25Retriever:
         sources: list[dict],
     ):
         changed = False
+        changed_scopes = set(scope_keys)
         for doc in self.corpus:
             metadata = doc.get("metadata", {})
             if metadata.get("document_hash") == content_hash:
+                changed_scopes.update(metadata.get("scope_keys", []))
                 metadata["scope_keys"] = scope_keys
                 metadata["sources"] = sources
                 changed = True
         if changed:
+            self._invalidate_scope_cache(changed_scopes)
             self._save()
 
     def delete_document(self, content_hash: str):
-        self.corpus = [
-            doc for doc in self.corpus
-            if doc.get("metadata", {}).get("document_hash") != content_hash
-        ]
+        removed_scopes = set()
+        retained = []
+        for doc, tokens in zip(self.corpus, self._tokenized_corpus):
+            if doc.get("metadata", {}).get("document_hash") == content_hash:
+                removed_scopes.update(doc.get("metadata", {}).get("scope_keys", []))
+            else:
+                retained.append((doc, tokens))
+        self.corpus = [doc for doc, _ in retained]
+        self._tokenized_corpus = [tokens for _, tokens in retained]
         if self.corpus:
-            self.bm25 = BM25Okapi([
-                self._tokenize(doc["text"]) for doc in self.corpus
-            ])
+            self.bm25 = BM25Okapi(self._tokenized_corpus)
         else:
             self.bm25 = None
+        self._invalidate_scope_cache(removed_scopes)
         self._save()
+
+    def _invalidate_scope_cache(self, scope_keys) -> None:
+        affected = set(scope_keys or [])
+        if not affected or "global" in affected:
+            self._scope_cache.clear()
+            return
+        for key in list(self._scope_cache):
+            if affected.intersection(key):
+                self._scope_cache.pop(key, None)
 
     def query(
         self,
@@ -115,21 +166,29 @@ class BM25Retriever:
         if not self.corpus:
             return []
 
-        eligible = self.corpus
-        if scope_keys:
-            allowed = set(scope_keys)
-            eligible = [
-                doc for doc in self.corpus
-                if allowed.intersection(
-                    doc.get("metadata", {}).get("scope_keys", [])
-                )
-            ]
+        cache_key = tuple(sorted(scope_keys or []))
+        cached = self._scope_cache.get(cache_key)
+        if cached:
+            eligible, bm25 = cached
+        else:
+            eligible = self.corpus
+            eligible_tokens = self._tokenized_corpus
+            if scope_keys:
+                allowed = set(scope_keys)
+                pairs = [
+                    (doc, tokens)
+                    for doc, tokens in zip(self.corpus, self._tokenized_corpus)
+                    if allowed.intersection(
+                        doc.get("metadata", {}).get("scope_keys", [])
+                    )
+                ]
+                eligible = [doc for doc, _ in pairs]
+                eligible_tokens = [tokens for _, tokens in pairs]
+            bm25 = BM25Okapi(eligible_tokens) if eligible_tokens else None
+            self._scope_cache[cache_key] = (eligible, bm25)
         if not eligible:
             return []
 
-        bm25 = BM25Okapi([
-            self._tokenize(doc["text"]) for doc in eligible
-        ])
         tokenized_query = self._tokenize(question)
         scores = bm25.get_scores(tokenized_query)
         
@@ -202,6 +261,8 @@ class HybridSearcher:
         
         # 2. 清空 BM25
         self.bm25_retriever.corpus = []
+        self.bm25_retriever._tokenized_corpus = []
+        self.bm25_retriever._scope_cache.clear()
         self.bm25_retriever.bm25 = None
         if os.path.exists(self.bm25_retriever.storage_path):
             os.remove(self.bm25_retriever.storage_path)
@@ -212,28 +273,46 @@ class HybridSearcher:
         question: str,
         top_k: int = None,
         class_id: int | None = None,
+        request_id: str | None = None,
     ) -> List[Dict[str, Any]]:
         if top_k is None:
             top_k = settings.TOP_K
             
-        logger.info(f"执行混合检索: {question}")
+        logger.info("执行混合检索，查询长度=%s", len(question))
         scope_keys = ["global"]
         if class_id is not None:
             scope_keys.append(f"class:{class_id}")
         # 1. 获取向量检索结果 (取 2 倍 top_k 用于融合)
+        vector_started_at = time.perf_counter()
         vector_results = vector_repo.query(
             question,
             top_k=top_k * 2,
             scope_keys=scope_keys,
+            request_id=request_id,
         )
+        logger.info(json.dumps({
+            "event": "chat_timing",
+            "request_id": request_id or "-",
+            "stage": "vector_retrieval",
+            "elapsed_ms": round((time.perf_counter() - vector_started_at) * 1000, 2),
+            "result_count": len(vector_results),
+        }, ensure_ascii=False))
         logger.info(f"向量检索返回 {len(vector_results)} 条结果")
         
         # 2. 获取 BM25 检索结果
+        bm25_started_at = time.perf_counter()
         bm25_results = self.bm25_retriever.query(
             question,
             top_k=top_k * 2,
             scope_keys=scope_keys,
         )
+        logger.info(json.dumps({
+            "event": "chat_timing",
+            "request_id": request_id or "-",
+            "stage": "bm25",
+            "elapsed_ms": round((time.perf_counter() - bm25_started_at) * 1000, 2),
+            "result_count": len(bm25_results),
+        }, ensure_ascii=False))
         logger.info(f"BM25 检索返回 {len(bm25_results)} 条结果")
         
         # 3. RRF 融合 (Reciprocal Rank Fusion)

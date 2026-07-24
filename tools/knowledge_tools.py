@@ -8,12 +8,12 @@ def create_knowledge_tool(vector_query_func, context_getter=lambda: {}):
     创建教学内容知识库查询工具
     """
     def wrapper(question: str) -> str:
-        logger.info(f"知识库查询工具收到问题: {question}")
+        logger.info("知识库查询工具收到查询，长度=%s", len(question))
         context = context_getter() or {}
-        results = vector_query_func(
-            question,
-            class_id=context.get("class_id"),
-        )
+        query_kwargs = {"class_id": context.get("class_id")}
+        if context.get("request_id"):
+            query_kwargs["request_id"] = context["request_id"]
+        results = vector_query_func(question, **query_kwargs)
         if not results:
             logger.warning("知识库查询未找到结果")
             return "在课件资料中未找到相关知识点。"
