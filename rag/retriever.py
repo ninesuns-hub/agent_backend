@@ -47,6 +47,16 @@ class BM25Retriever:
         """
         documents: List of {"id": str, "text": str, "metadata": dict}
         """
+        hashes = {
+            doc.get("metadata", {}).get("document_hash")
+            for doc in documents
+            if doc.get("metadata", {}).get("document_hash")
+        }
+        if hashes:
+            self.corpus = [
+                doc for doc in self.corpus
+                if doc.get("metadata", {}).get("document_hash") not in hashes
+            ]
         self.corpus.extend(documents)
         tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
         self.bm25 = BM25Okapi(tokenized_corpus)
@@ -67,12 +77,61 @@ class BM25Retriever:
             self.bm25 = None
         self._save()
 
-    def query(self, question: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        if not self.bm25 or not self.corpus:
+    def update_document_access(
+        self,
+        content_hash: str,
+        scope_keys: list[str],
+        sources: list[dict],
+    ):
+        changed = False
+        for doc in self.corpus:
+            metadata = doc.get("metadata", {})
+            if metadata.get("document_hash") == content_hash:
+                metadata["scope_keys"] = scope_keys
+                metadata["sources"] = sources
+                changed = True
+        if changed:
+            self._save()
+
+    def delete_document(self, content_hash: str):
+        self.corpus = [
+            doc for doc in self.corpus
+            if doc.get("metadata", {}).get("document_hash") != content_hash
+        ]
+        if self.corpus:
+            self.bm25 = BM25Okapi([
+                self._tokenize(doc["text"]) for doc in self.corpus
+            ])
+        else:
+            self.bm25 = None
+        self._save()
+
+    def query(
+        self,
+        question: str,
+        top_k: int = 5,
+        scope_keys: list[str] | None = None,
+    ) -> List[Dict[str, Any]]:
+        if not self.corpus:
             return []
-        
+
+        eligible = self.corpus
+        if scope_keys:
+            allowed = set(scope_keys)
+            eligible = [
+                doc for doc in self.corpus
+                if allowed.intersection(
+                    doc.get("metadata", {}).get("scope_keys", [])
+                )
+            ]
+        if not eligible:
+            return []
+
+        bm25 = BM25Okapi([
+            self._tokenize(doc["text"]) for doc in eligible
+        ])
         tokenized_query = self._tokenize(question)
-        scores = self.bm25.get_scores(tokenized_query)
+        scores = bm25.get_scores(tokenized_query)
         
         # 获取得分最高的前 k 个索引
         top_n = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
@@ -80,7 +139,7 @@ class BM25Retriever:
         results = []
         for i in top_n:
             if scores[i] > 0:
-                doc = self.corpus[i].copy()
+                doc = eligible[i].copy()
                 doc["bm25_score"] = float(scores[i])
                 results.append(doc)
         return results
@@ -118,6 +177,21 @@ class HybridSearcher:
         vector_repo.delete_material_documents(class_id, material_id)
         self.bm25_retriever.delete_material_documents(class_id, material_id)
 
+    def update_document_access(
+        self,
+        content_hash: str,
+        scope_keys: list[str],
+        sources: list[dict],
+    ):
+        vector_repo.update_document_access(content_hash, scope_keys, sources)
+        self.bm25_retriever.update_document_access(
+            content_hash, scope_keys, sources
+        )
+
+    def delete_document(self, content_hash: str):
+        vector_repo.delete_document(content_hash)
+        self.bm25_retriever.delete_document(content_hash)
+
     def clear_all(self):
         """
         清空所有索引（向量库和 BM25）
@@ -133,17 +207,33 @@ class HybridSearcher:
             os.remove(self.bm25_retriever.storage_path)
         logger.info("所有 RAG 索引已清空")
 
-    def query(self, question: str, top_k: int = None) -> List[Dict[str, Any]]:
+    def query(
+        self,
+        question: str,
+        top_k: int = None,
+        class_id: int | None = None,
+    ) -> List[Dict[str, Any]]:
         if top_k is None:
             top_k = settings.TOP_K
             
         logger.info(f"执行混合检索: {question}")
+        scope_keys = ["global"]
+        if class_id is not None:
+            scope_keys.append(f"class:{class_id}")
         # 1. 获取向量检索结果 (取 2 倍 top_k 用于融合)
-        vector_results = vector_repo.query(question, top_k=top_k * 2)
+        vector_results = vector_repo.query(
+            question,
+            top_k=top_k * 2,
+            scope_keys=scope_keys,
+        )
         logger.info(f"向量检索返回 {len(vector_results)} 条结果")
         
         # 2. 获取 BM25 检索结果
-        bm25_results = self.bm25_retriever.query(question, top_k=top_k * 2)
+        bm25_results = self.bm25_retriever.query(
+            question,
+            top_k=top_k * 2,
+            scope_keys=scope_keys,
+        )
         logger.info(f"BM25 检索返回 {len(bm25_results)} 条结果")
         
         # 3. RRF 融合 (Reciprocal Rank Fusion)
@@ -153,13 +243,19 @@ class HybridSearcher:
         # 处理向量结果
         for rank, res in enumerate(vector_results):
             # 使用内容摘要和元数据生成唯一 ID
-            doc_id = f"{res['source_file']}_{res['page']}_{res['text'][:30]}"
+            doc_id = (
+                f"{res.get('document_hash', '')}_"
+                f"{res['page']}_{res['text'][:30]}"
+            )
             doc_map[doc_id] = res
             rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + 1.0 / (self.k + rank + 1)
             
         # 处理 BM25 结果
         for rank, res in enumerate(bm25_results):
-            doc_id = f"{res['metadata']['source_file']}_{res['metadata']['page']}_{res['text'][:30]}"
+            doc_id = (
+                f"{res['metadata'].get('document_hash', '')}_"
+                f"{res['metadata']['page']}_{res['text'][:30]}"
+            )
             if doc_id not in doc_map:
                 doc_map[doc_id] = {
                     "text": res["text"],
@@ -167,6 +263,8 @@ class HybridSearcher:
                     "source_type": res["metadata"]["source_type"],
                     "chapter": res["metadata"]["chapter"],
                     "page": res["metadata"]["page"],
+                    "document_hash": res["metadata"].get("document_hash", ""),
+                    "sources": res["metadata"].get("sources", []),
                     "similarity": 0.0 
                 }
             rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + 1.0 / (self.k + rank + 1)
@@ -177,6 +275,26 @@ class HybridSearcher:
         final_results = []
         for doc_id in sorted_ids:
             res = doc_map[doc_id]
+            sources = res.get("sources") or res.get("metadata", {}).get("sources", [])
+            class_source = next(
+                (
+                    source for source in sources
+                    if class_id is not None and source.get("class_id") == class_id
+                ),
+                None,
+            )
+            global_source = next(
+                (
+                    source for source in sources
+                    if source.get("scope_type") == "global"
+                ),
+                None,
+            )
+            selected_source = class_source or global_source
+            if selected_source:
+                res["source_file"] = selected_source.get(
+                    "filename", res.get("source_file", "未知资料")
+                )
             res["rrf_score"] = round(rrf_scores[doc_id], 4)
             final_results.append(res)
             
