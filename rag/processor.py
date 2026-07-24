@@ -15,7 +15,7 @@ class PDFParser:
         self.output_dir = output_dir or settings.CHUNKS_DIR
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def parse(self, file_path: str) -> List[Dict[str, Any]]:
+    def parse(self, file_path: str, artifact_name: str | None = None) -> List[Dict[str, Any]]:
         """
         解析单个 PDF 文件
         返回: List of { "text": str, "page": int, "metadata": dict }
@@ -50,7 +50,7 @@ class PDFParser:
             return []
         
         # 保存为本地 Markdown 文件以便调试
-        self._save_to_markdown(file_name, chunks)
+        self._save_to_markdown(artifact_name or file_name, chunks)
         return chunks
 
     def _save_to_markdown(self, file_name: str, chunks: List[Dict[str, Any]]):
@@ -72,7 +72,7 @@ class PPTXParser:
         self.output_dir = output_dir or settings.CHUNKS_DIR
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def parse(self, file_path: str) -> List[Dict[str, Any]]:
+    def parse(self, file_path: str, artifact_name: str | None = None) -> List[Dict[str, Any]]:
         """
         解析单个 PPTX/PPSX 文件
         返回: List of { "text": str, "page": int, "metadata": dict }
@@ -115,7 +115,7 @@ class PPTXParser:
                 })
         
         # 保存为本地 Markdown 文件以便调试
-        self._save_to_markdown(file_name, chunks)
+        self._save_to_markdown(artifact_name or file_name, chunks)
         return chunks
 
     def _save_to_markdown(self, file_name: str, chunks: List[Dict[str, Any]]):

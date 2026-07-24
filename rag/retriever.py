@@ -52,6 +52,21 @@ class BM25Retriever:
         self.bm25 = BM25Okapi(tokenized_corpus)
         self._save()
 
+    def delete_material_documents(self, class_id: int, material_id: int):
+        self.corpus = [
+            doc for doc in self.corpus
+            if not (
+                doc.get("metadata", {}).get("class_id") == class_id
+                and doc.get("metadata", {}).get("material_id") == material_id
+            )
+        ]
+        if self.corpus:
+            tokenized_corpus = [self._tokenize(doc["text"]) for doc in self.corpus]
+            self.bm25 = BM25Okapi(tokenized_corpus)
+        else:
+            self.bm25 = None
+        self._save()
+
     def query(self, question: str, top_k: int = 5) -> List[Dict[str, Any]]:
         if not self.bm25 or not self.corpus:
             return []
@@ -85,6 +100,7 @@ class HybridSearcher:
         # 2. 写入 BM25
         bm25_docs = []
         for c in chunks:
+            extra_metadata = c.get("metadata", {})
             bm25_docs.append({
                 "id": c.get("id", str(uuid.uuid4())),
                 "text": c["text"],
@@ -93,9 +109,14 @@ class HybridSearcher:
                     "source_file": c["source_file"],
                     "chapter": c.get("chapter", ""),
                     "page": str(c.get("page", "")),
+                    **extra_metadata,
                 }
             })
         self.bm25_retriever.add_documents(bm25_docs)
+
+    def delete_material_documents(self, class_id: int, material_id: int):
+        vector_repo.delete_material_documents(class_id, material_id)
+        self.bm25_retriever.delete_material_documents(class_id, material_id)
 
     def clear_all(self):
         """
