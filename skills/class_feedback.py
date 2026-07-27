@@ -2,11 +2,10 @@
 import json
 import logging
 import re
-import time
 from typing import Any, Dict, List
 
+from openai import OpenAI
 from agent_core.config.settings import settings
-from agent_core.llm_runtime import get_chat_client, thinking_extra_body
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +84,11 @@ def generate_class_feedback(
 4. 列举用「1. 2. 3.」编号，每条单独成段
 5. 从教师视角给出可落地的建议；数据不足时如实说明"""
 
-    client = get_chat_client()
-    started_at = time.perf_counter()
+    client = OpenAI(
+        api_key=settings.CHAT_API_KEY,
+        base_url=settings.CHAT_BASE_URL,
+        timeout=120.0,
+    )
     try:
         response = client.chat.completions.create(
             model=settings.CHAT_MODEL_NAME,
@@ -96,19 +98,9 @@ def generate_class_feedback(
             ],
             response_format={"type": "json_object"},
             temperature=0.3,
-            extra_body=thinking_extra_body(False),
         )
         data = json.loads(response.choices[0].message.content)
         summary = data.get("summary_text") or data.get("summary_markdown", "")
-        usage = getattr(response, "usage", None)
-        logger.info(
-            "班级学情模型调用完成 elapsed_ms=%.2f student_count=%s "
-            "prompt_tokens=%s completion_tokens=%s",
-            (time.perf_counter() - started_at) * 1000,
-            len(student_reports),
-            getattr(usage, "prompt_tokens", None),
-            getattr(usage, "completion_tokens", None),
-        )
         return {"summary": _clean_text(summary), "stats": data.get("stats", {})}
     except Exception as e:
         logger.exception("班级学情反馈生成失败 error_type=%s", type(e).__name__)

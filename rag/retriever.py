@@ -4,17 +4,12 @@ import logging
 import jieba
 import uuid
 import time
-from concurrent.futures import ThreadPoolExecutor
 from rank_bm25 import BM25Okapi
 from typing import List, Dict, Any
 from ..config.settings import settings
 from database import vector_repo
 
 logger = logging.getLogger(__name__)
-_retrieval_executor = ThreadPoolExecutor(
-    max_workers=4,
-    thread_name_prefix="hybrid-retrieval",
-)
 
 class BM25Retriever:
     def __init__(self, storage_path: str):
@@ -287,24 +282,14 @@ class HybridSearcher:
         scope_keys = ["global"]
         if class_id is not None:
             scope_keys.append(f"class:{class_id}")
-        # 向量检索与 BM25 互不依赖，并行执行，避免把远程
-        # Embedding 与本地词法检索的耗时串联起来。
+        # 1. 获取向量检索结果 (取 2 倍 top_k 用于融合)
         vector_started_at = time.perf_counter()
-        bm25_started_at = time.perf_counter()
-        vector_future = _retrieval_executor.submit(
-            vector_repo.query,
+        vector_results = vector_repo.query(
             question,
             top_k=top_k * 2,
             scope_keys=scope_keys,
             request_id=request_id,
         )
-        bm25_future = _retrieval_executor.submit(
-            self.bm25_retriever.query,
-            question,
-            top_k=top_k * 2,
-            scope_keys=scope_keys,
-        )
-        vector_results = vector_future.result()
         logger.info(json.dumps({
             "event": "chat_timing",
             "request_id": request_id or "-",
@@ -314,7 +299,13 @@ class HybridSearcher:
         }, ensure_ascii=False))
         logger.info(f"向量检索返回 {len(vector_results)} 条结果")
         
-        bm25_results = bm25_future.result()
+        # 2. 获取 BM25 检索结果
+        bm25_started_at = time.perf_counter()
+        bm25_results = self.bm25_retriever.query(
+            question,
+            top_k=top_k * 2,
+            scope_keys=scope_keys,
+        )
         logger.info(json.dumps({
             "event": "chat_timing",
             "request_id": request_id or "-",
