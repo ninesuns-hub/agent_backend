@@ -2,11 +2,13 @@ import re
 import logging
 import time
 import json
-from openai import OpenAI
+import threading
 from typing import Iterator, List, Dict, Any, Protocol
 from .base_agent import BaseAgent
 from .tools import Tool
 from .prompts import REACT_PROMPT
+from .latency_policy import decide_latency_path
+from .llm_runtime import get_chat_client, thinking_extra_body
 from .visualization import (
     VisualizationDecision,
     decide_visualization,
@@ -88,14 +90,28 @@ class ReactAgent(BaseAgent):
     ) -> None:
         super().__init__()
         self.config = config
-        self._client = OpenAI(
-            api_key=config.CHAT_API_KEY,
-            base_url=config.CHAT_BASE_URL,
-        )
+        self._client = get_chat_client(config)
         self.tools = {t.name: t for t in tools}
         self.max_iterations = 5
+        self._request_state = threading.local()
+        self.request_context = {}
         self.last_observations = []
-        self.request_context: Dict[str, Any] = {}
+
+    @property
+    def request_context(self) -> Dict[str, Any]:
+        return getattr(self._request_state, "request_context", {})
+
+    @request_context.setter
+    def request_context(self, value: Dict[str, Any]) -> None:
+        self._request_state.request_context = value
+
+    @property
+    def last_observations(self) -> List[Any]:
+        return getattr(self._request_state, "last_observations", [])
+
+    @last_observations.setter
+    def last_observations(self, value: List[Any]) -> None:
+        self._request_state.last_observations = value
 
     def stream_chat(self, user_input: str, request_context: Dict[str, Any] | None = None):
         for event in self.stream_events(user_input, request_context=request_context):
@@ -124,17 +140,48 @@ class ReactAgent(BaseAgent):
         )
         self.request_context["visualization_required"] = visual_decision.required
         self.request_context["visualization_reason"] = visual_decision.reason
+        latency_decision = decide_latency_path(
+            user_input,
+            has_image=bool(self.request_context.get("image_path")),
+        )
+        adaptive_thinking = getattr(
+            self.config,
+            "CHAT_ADAPTIVE_THINKING_ENABLED",
+            True,
+        )
+        self.request_context["thinking_enabled"] = (
+            latency_decision.thinking_enabled if adaptive_thinking else True
+        )
+        self.request_context["latency_route"] = latency_decision.reason
         started_at = time.perf_counter()
         logger.info(
-            "收到用户输入 request_id=%s input_length=%s visualization_required=%s visualization_reason=%s",
+            "收到用户输入 request_id=%s input_length=%s visualization_required=%s "
+            "visualization_reason=%s latency_route=%s thinking_enabled=%s",
             request_id,
             len(user_input),
             visual_decision.required,
             visual_decision.reason,
+            latency_decision.reason,
+            self.request_context["thinking_enabled"],
         )
         try:
             yield {"type": "status", "stage": "understanding"}
-            yield from self._build_stream_response(user_input)
+            fast_path_enabled = getattr(
+                self.config,
+                "CHAT_FAST_PATH_ENABLED",
+                False,
+            )
+            if (
+                fast_path_enabled
+                and latency_decision.fast_action
+                and latency_decision.fast_action in self.tools
+            ):
+                yield from self._build_fast_response(
+                    user_input,
+                    latency_decision.fast_action,
+                )
+            else:
+                yield from self._build_stream_response(user_input)
             self._log_timing(
                 request_id,
                 "agent_total",
@@ -147,6 +194,102 @@ class ReactAgent(BaseAgent):
                 "type": "error",
                 "message": f"抱歉，处理您的请求时出现了错误: {str(e)}",
             }
+
+    def _build_fast_response(
+        self,
+        user_input: str,
+        action: str,
+    ) -> Iterator[Dict[str, Any]]:
+        """Run one unambiguous tool and stream a terminal answer directly."""
+        request_id = self.request_context.get("request_id", "-")
+        yield {"type": "status", "stage": self._status_for_action(action)}
+        tool_started_at = time.perf_counter()
+        try:
+            observation = self.tools[action].run(user_input)
+            if action == "query_lecture_knowledge":
+                self.last_observations.append(observation)
+        except Exception as exc:
+            logger.warning(
+                "快路径工具失败，回退 ReAct request_id=%s tool=%s error=%s",
+                request_id,
+                action,
+                type(exc).__name__,
+            )
+            self._log_timing(
+                request_id,
+                "fast_path_tool",
+                tool_started_at,
+                tool=action,
+                success=False,
+            )
+            yield {"type": "status", "stage": "organizing"}
+            yield from self._build_stream_response(user_input)
+            return
+
+        self._log_timing(
+            request_id,
+            "fast_path_tool",
+            tool_started_at,
+            tool=action,
+            success=True,
+        )
+        yield {"type": "status", "stage": "organizing"}
+        prompt = self._direct_answer_prompt(
+            user_input,
+            action,
+            observation or "没有查询到可用信息。",
+        )
+        answer_parts: List[str] = []
+        llm_started_at = time.perf_counter()
+        first_content_at = None
+        for delta in self._call_direct_llm_stream(prompt):
+            if first_content_at is None:
+                first_content_at = time.perf_counter()
+                self._log_timing(
+                    request_id,
+                    "direct_first_answer_token",
+                    llm_started_at,
+                    tool=action,
+                )
+            answer_parts.append(delta)
+            yield {"type": "content", "delta": delta}
+        self._log_timing(
+            request_id,
+            "direct_answer",
+            llm_started_at,
+            tool=action,
+        )
+        yield from self._ensure_visualization(
+            user_input,
+            "".join(answer_parts),
+        )
+
+    def _direct_answer_prompt(
+        self,
+        user_input: str,
+        action: str,
+        observation: str,
+    ) -> str:
+        source_requirement = (
+            "如果资料中提供了文件名和页码，请在相关小节开头使用“**来源**”"
+            "列表准确标注；没有命中资料时不要编造来源。"
+            if action == "query_lecture_knowledge"
+            else "只使用查询结果中确实存在的课程信息，不要编造。"
+        )
+        decision = VisualizationDecision(
+            bool(self.request_context.get("visualization_required")),
+            str(self.request_context.get("visualization_reason", "")),
+        )
+        return (
+            "工具调用已经完成。请直接给出最终回答，不要输出 thought、action、"
+            "input、answer 等控制标签，也不要再次决定或调用工具。\n"
+            "保持现有回答深度，不缩短成简略答案；先给结论，再清晰解释并举例。"
+            "数学表达使用标准 LaTeX，排版使用 Markdown。\n"
+            f"{source_requirement}\n"
+            f"{visualization_instruction(decision)}\n\n"
+            f"用户问题：\n{user_input}\n\n"
+            f"工具结果：\n{observation}"
+        )
 
     def _build_stream_response(self, user_input: str):
         scratchpad = ""
@@ -419,6 +562,7 @@ class ReactAgent(BaseAgent):
             model=self.config.CHAT_MODEL_NAME,
             max_tokens=min(self.config.MAX_TOKENS, 1200),
             temperature=0,
+            extra_body=thinking_extra_body(False),
             messages=[
                 {
                     "role": "system",
@@ -443,6 +587,9 @@ class ReactAgent(BaseAgent):
             {"role": "system", "content": self.config.SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
+        thinking_enabled = bool(
+            self.request_context.get("thinking_enabled", True)
+        )
         try:
             response = self._client.chat.completions.create(
                 model=self.config.CHAT_MODEL_NAME,
@@ -450,14 +597,95 @@ class ReactAgent(BaseAgent):
                 temperature=0,
                 messages=messages,
                 stream=True,
+                stream_options={"include_usage": True},
+                extra_body=thinking_extra_body(thinking_enabled),
                 # 移除 stop 序列，让模型完整输出标签
             )
+            reasoning_chars = 0
+            usage = None
             for chunk in response:
+                if getattr(chunk, "usage", None):
+                    usage = chunk.usage
                 if not chunk.choices:
                     continue
-                content = chunk.choices[0].delta.content
+                delta = chunk.choices[0].delta
+                reasoning_chars += len(
+                    getattr(delta, "reasoning_content", None) or ""
+                )
+                content = getattr(delta, "content", None)
                 if content:
                     yield content
+            self._log_llm_usage(
+                usage,
+                thinking_enabled=thinking_enabled,
+                reasoning_chars=reasoning_chars,
+                stage="react",
+            )
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
             raise
+
+    def _call_direct_llm_stream(self, prompt: str) -> Iterator[str]:
+        try:
+            response = self._client.chat.completions.create(
+                model=self.config.CHAT_MODEL_NAME,
+                max_tokens=self.config.MAX_TOKENS,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": self.config.SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                stream=True,
+                stream_options={"include_usage": True},
+                extra_body=thinking_extra_body(False),
+            )
+            usage = None
+            for chunk in response:
+                if getattr(chunk, "usage", None):
+                    usage = chunk.usage
+                if not chunk.choices:
+                    continue
+                content = getattr(chunk.choices[0].delta, "content", None)
+                if content:
+                    yield content
+            self._log_llm_usage(
+                usage,
+                thinking_enabled=False,
+                reasoning_chars=0,
+                stage="direct_answer",
+            )
+        except Exception as exc:
+            logger.error("直接回答模型调用失败: %s", exc)
+            raise
+
+    def _log_llm_usage(
+        self,
+        usage: Any,
+        *,
+        thinking_enabled: bool,
+        reasoning_chars: int,
+        stage: str,
+    ) -> None:
+        payload = {
+            "event": "chat_llm_usage",
+            "request_id": self.request_context.get("request_id", "-"),
+            "stage": stage,
+            "thinking_enabled": thinking_enabled,
+            "reasoning_chars": reasoning_chars,
+        }
+        if usage is not None:
+            for field in (
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "prompt_cache_hit_tokens",
+                "prompt_cache_miss_tokens",
+            ):
+                value = getattr(usage, field, None)
+                if value is not None:
+                    payload[field] = value
+            details = getattr(usage, "prompt_tokens_details", None)
+            cached_tokens = getattr(details, "cached_tokens", None)
+            if cached_tokens is not None:
+                payload["cached_tokens"] = cached_tokens
+        logger.info(json.dumps(payload, ensure_ascii=False))

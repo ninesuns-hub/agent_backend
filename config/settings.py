@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     CHAT_API_KEY: str
     CHAT_BASE_URL: str
     CHAT_MODEL_NAME: str
+    CHAT_FAST_PATH_ENABLED: bool = True
+    CHAT_ADAPTIVE_THINKING_ENABLED: bool = True
     
     # ── Embedding API 配置 ──
     EMBED_API_KEY: str
