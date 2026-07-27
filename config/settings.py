@@ -1,6 +1,5 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
 
 class Settings(BaseSettings):
     # ── Chat API 配置 ──
@@ -29,18 +28,19 @@ class Settings(BaseSettings):
     MYSQL_HOST: str = "localhost"
     MYSQL_PORT: int = 3306
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "L15834556205"
+    MYSQL_PASSWORD: str
     MYSQL_DB: str = "Discrete"
 
     # ── Redis 配置 ──
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
-    REDIS_PASSWORD: str = ""
+    REDIS_PASSWORD: str
 
     # ── 鉴权配置 ──
-    JWT_SECRET: str = "discrete_math_secret_key_2026"
+    JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # ── 邮箱配置 ──
     SMTP_HOST: str = "smtp.qq.com"
