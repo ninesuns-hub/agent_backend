@@ -9,6 +9,11 @@ from agent_core.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+_TRAILING_ADVICE_SECTION = re.compile(
+    r"(?:^|\n)\s*(?:学习建议|教学建议)\s*[：:]\s*\n?.*$",
+    re.DOTALL,
+)
+
 
 def _clean_text(text: str) -> str:
     lines = []
@@ -18,6 +23,10 @@ def _clean_text(text: str) -> str:
         line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+def _strip_trailing_advice_section(text: str) -> str:
+    return _TRAILING_ADVICE_SECTION.sub("", text).strip()
 
 
 def _format_reports(reports: List[dict]) -> str:
@@ -44,7 +53,7 @@ def generate_class_feedback(
         return {
             "summary": (
                 f"关于{class_name}的班级学情，目前还没有收集到足够的互动数据。\n\n"
-                f"建议先鼓励同学们多与 AI 助教交流，积累一段时间后再来看整体情况，会更有参考价值。"
+                f"当前样本不足以形成有参考价值的整体判断。"
             ),
             "stats": {
                 "student_count": 0,
@@ -80,9 +89,10 @@ def generate_class_feedback(
 正文写作要求（必须严格遵守）：
 1. 纯文本，禁止 Markdown：不要用 #、##、-、*、** 等符号
 2. 分段落、语气自然，像教学顾问与教师面对面交流
-3. 用小标题引导，如「班级整体情况：」「共性问题：」「教学建议：」
+3. 用小标题引导，如「班级整体情况：」「共性问题：」
 4. 列举用「1. 2. 3.」编号，每条单独成段
-5. 从教师视角给出可落地的建议；数据不足时如实说明"""
+5. summary_text 中禁止出现「学习建议」「教学建议」标题或任何建议列表
+6. 可落地的教师建议只写入 teaching_suggestions；数据不足时如实说明"""
 
     client = OpenAI(
         api_key=settings.CHAT_API_KEY,
@@ -101,7 +111,8 @@ def generate_class_feedback(
         )
         data = json.loads(response.choices[0].message.content)
         summary = data.get("summary_text") or data.get("summary_markdown", "")
-        return {"summary": _clean_text(summary), "stats": data.get("stats", {})}
+        summary = _strip_trailing_advice_section(_clean_text(summary))
+        return {"summary": summary, "stats": data.get("stats", {})}
     except Exception as e:
         logger.exception("班级学情反馈生成失败 error_type=%s", type(e).__name__)
         raise RuntimeError("班级学情反馈生成服务暂时不可用") from e
