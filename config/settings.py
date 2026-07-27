@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
     QDRANT_COLLECTION_NAME: str = "discrete_math_materials"
+    QDRANT_MEMORY_COLLECTION_NAME: str = "assistant_memories"
     QDRANT_PATH: str = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "storage", "processed", "vector_db")
 
     # ── MySQL 配置 ──
@@ -92,6 +93,18 @@ class Settings(BaseSettings):
     # LOG_FILE 已经在路径配置中定义
 
     MAX_TOKENS: int = 2048
+
+    # Conversation context and long-term memory rollout controls.
+    CHAT_CONTEXT_ENABLED: bool = True
+    CONVERSATION_SUMMARY_ENABLED: bool = True
+    MEMORY_WRITE_ENABLED: bool = True
+    MEMORY_READ_ENABLED: bool = False
+    CHAT_RECENT_MESSAGE_LIMIT: int = 12
+    CHAT_RECENT_TOKEN_LIMIT: int = 6000
+    CHAT_SUMMARY_TOKEN_LIMIT: int = 1200
+    CHAT_MEMORY_TOKEN_LIMIT: int = 1000
+    CHAT_OUTPUT_TOKEN_RESERVE: int = 2000
+    MEMORY_RETRIEVAL_LIMIT: int = 5
 
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(__file__), ".env"), 

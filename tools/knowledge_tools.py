@@ -3,13 +3,13 @@ from .base import Tool
 
 logger = logging.getLogger(__name__)
 
-def create_knowledge_tool(vector_query_func, context_getter=lambda: {}):
+def create_knowledge_tool(vector_query_func, context_getter=None):
     """
     创建教学内容知识库查询工具
     """
-    def wrapper(question: str) -> str:
+    def wrapper(question: str, run_context: dict | None = None) -> str:
         logger.info("知识库查询工具收到查询，长度=%s", len(question))
-        context = context_getter() or {}
+        context = run_context or (context_getter() if context_getter else {}) or {}
         query_kwargs = {"class_id": context.get("class_id")}
         if context.get("request_id"):
             query_kwargs["request_id"] = context["request_id"]
@@ -42,5 +42,6 @@ def create_knowledge_tool(vector_query_func, context_getter=lambda: {}):
     return Tool(
         name="query_lecture_knowledge",
         func=wrapper,
+        accepts_context=True,
         description="非常有用！当你需要回答离散数学的具体知识点、定义、定理、公式或课件中的例题时，请调用此工具。输入应该是具体的数学概念或问题。"
     )

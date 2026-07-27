@@ -7,11 +7,11 @@ from .base import Tool
 logger = logging.getLogger(__name__)
 
 
-def create_image_understanding_tool(context_getter: Callable[[], Dict]):
+def create_image_understanding_tool(context_getter: Callable[[], Dict] | None = None):
     """创建图片识图工具，从 request_context 读取 image_path"""
 
-    def wrapper(question: str) -> str:
-        ctx = context_getter() or {}
+    def wrapper(question: str, run_context: dict | None = None) -> str:
+        ctx = run_context or (context_getter() if context_getter else {}) or {}
         image_path = ctx.get("image_path")
         if not image_path:
             return "当前会话没有可分析的图片。请确认学生已上传图片。"
@@ -21,6 +21,7 @@ def create_image_understanding_tool(context_getter: Callable[[], Dict]):
     return Tool(
         name="analyze_uploaded_image",
         func=wrapper,
+        accepts_context=True,
         description=(
             "当学生上传了图片（图论题、题目截图、手写笔记等）时必须优先调用。"
             "输入应为针对图片的具体问题或分析要求，例如「识别图中的顶点与边」或「转写题目文字」。"
