@@ -81,7 +81,11 @@ def generate_student_report(
 5. 须覆盖：学习概况、涉及知识点、掌握情况、薄弱环节、学习建议
 6. 基于对话客观分析，不编造未出现的知识点；样本少时如实说明"""
 
-    client = OpenAI(api_key=settings.CHAT_API_KEY, base_url=settings.CHAT_BASE_URL)
+    client = OpenAI(
+        api_key=settings.CHAT_API_KEY,
+        base_url=settings.CHAT_BASE_URL,
+        timeout=120.0,
+    )
     try:
         response = client.chat.completions.create(
             model=settings.CHAT_MODEL_NAME,
@@ -96,8 +100,5 @@ def generate_student_report(
         summary = data.get("summary_text") or data.get("summary_markdown", "")
         return {"summary": _clean_text(summary), "stats": data.get("stats", {})}
     except Exception as e:
-        logger.error(f"学情报告生成失败: {e}")
-        return {
-            "summary": f"抱歉，{student_name} 的学情报告生成时遇到了问题：{str(e)}",
-            "stats": {"message_count": len(messages), "error": str(e)},
-        }
+        logger.exception("学情报告生成失败 error_type=%s", type(e).__name__)
+        raise RuntimeError("学情报告生成服务暂时不可用") from e

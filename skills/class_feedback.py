@@ -84,7 +84,11 @@ def generate_class_feedback(
 4. 列举用「1. 2. 3.」编号，每条单独成段
 5. 从教师视角给出可落地的建议；数据不足时如实说明"""
 
-    client = OpenAI(api_key=settings.CHAT_API_KEY, base_url=settings.CHAT_BASE_URL)
+    client = OpenAI(
+        api_key=settings.CHAT_API_KEY,
+        base_url=settings.CHAT_BASE_URL,
+        timeout=120.0,
+    )
     try:
         response = client.chat.completions.create(
             model=settings.CHAT_MODEL_NAME,
@@ -99,5 +103,5 @@ def generate_class_feedback(
         summary = data.get("summary_text") or data.get("summary_markdown", "")
         return {"summary": _clean_text(summary), "stats": data.get("stats", {})}
     except Exception as e:
-        logger.error(f"班级学情反馈生成失败: {e}")
-        return {"summary": f"抱歉，班级学情反馈生成时遇到了问题：{str(e)}", "stats": {"error": str(e)}}
+        logger.exception("班级学情反馈生成失败 error_type=%s", type(e).__name__)
+        raise RuntimeError("班级学情反馈生成服务暂时不可用") from e
