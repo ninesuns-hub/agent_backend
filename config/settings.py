@@ -1,4 +1,5 @@
 import os
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -11,6 +12,8 @@ class Settings(BaseSettings):
     EMBED_API_KEY: str
     EMBED_BASE_URL: str
     EMBED_MODEL_NAME: str
+    EMBED_DIMENSION: int = Field(default=4096, ge=64, le=4096)
+    EMBED_BATCH_SIZE: int = Field(default=32, ge=1, le=256)
     
     # ── 视觉识图 API（默认复用 EMBED 网关，需支持 vision 的模型）──
     VISION_API_KEY: str = ""
