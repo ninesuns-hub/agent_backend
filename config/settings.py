@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     CLASS_MATERIALS_DIR: str = os.path.join(RAW_DIR, "classes")
     HOMEWORK_DIR: str = os.path.join(RAW_DIR, "homework")
     CHAT_IMAGES_DIR: str = os.path.join(RAW_DIR, "chat_images")
+    CHAT_ATTACHMENTS_DIR: str = os.path.join(RAW_DIR, "chat_attachments")
     HOMEWORK_DIR: str = os.path.join(RAW_DIR, "homework")
     
     # 知识处理目录 (RAG)
@@ -107,6 +108,12 @@ class Settings(BaseSettings):
     CHAT_SUMMARY_TOKEN_LIMIT: int = 1200
     CHAT_MEMORY_TOKEN_LIMIT: int = 1000
     CHAT_OUTPUT_TOKEN_RESERVE: int = 2000
+    CHAT_ATTACHMENT_TOKEN_LIMIT: int = 5000
+    CHAT_ATTACHMENT_MAX_EXTRACTED_CHARS: int = 120000
+    CHAT_ATTACHMENT_OCR_MAX_PAGES: int = 20
+    CHAT_ATTACHMENT_RETENTION_HOURS: int = 24
+    CHAT_ATTACHMENT_UPLOADS_PER_HOUR: int = 20
+    CHAT_ATTACHMENT_OCR_PER_HOUR: int = 3
     MEMORY_RETRIEVAL_LIMIT: int = 5
 
     model_config = SettingsConfigDict(
