@@ -205,7 +205,6 @@ class ReactAgent(BaseAgent):
             response_text = ""
             streamed_answer = False
             streamed_answer_parts: List[str] = []
-            extractor = AnswerStreamExtractor()
             first_answer_at = None
             context_kwargs = {}
             if run_context.history_messages:
@@ -214,35 +213,49 @@ class ReactAgent(BaseAgent):
                 context_kwargs["summary_text"] = run_context.summary_text
             if run_context.memories:
                 context_kwargs["memories"] = run_context.memories
-            for raw_delta in self._call_llm_stream(prompt, **context_kwargs):
-                response_text += raw_delta
-                for answer_delta in extractor.feed(raw_delta):
-                    if answer_delta:
-                        if first_answer_at is None:
-                            first_answer_at = time.perf_counter()
-                            logger.info(
-                                json.dumps(
-                                    {
-                                        "event": "chat_timing",
-                                        "request_id": request_id,
-                                        "stage": "llm_first_answer_token",
-                                        "iteration": i + 1,
-                                        "elapsed_ms": round(
-                                            (first_answer_at - llm_started_at) * 1000,
-                                            2,
-                                        ),
-                                    },
-                                    ensure_ascii=False,
+            for empty_attempt in range(3):
+                extractor = AnswerStreamExtractor()
+                attempt_text = ""
+                for raw_delta in self._call_llm_stream(prompt, **context_kwargs):
+                    attempt_text += raw_delta
+                    for answer_delta in extractor.feed(raw_delta):
+                        if answer_delta:
+                            if first_answer_at is None:
+                                first_answer_at = time.perf_counter()
+                                logger.info(
+                                    json.dumps(
+                                        {
+                                            "event": "chat_timing",
+                                            "request_id": request_id,
+                                            "stage": "llm_first_answer_token",
+                                            "iteration": i + 1,
+                                            "elapsed_ms": round(
+                                                (first_answer_at - llm_started_at) * 1000,
+                                                2,
+                                            ),
+                                        },
+                                        ensure_ascii=False,
+                                    )
                                 )
-                            )
+                            streamed_answer = True
+                            streamed_answer_parts.append(answer_delta)
+                            yield {"type": "content", "delta": answer_delta}
+                for answer_delta in extractor.finish():
+                    if answer_delta:
                         streamed_answer = True
                         streamed_answer_parts.append(answer_delta)
                         yield {"type": "content", "delta": answer_delta}
-            for answer_delta in extractor.finish():
-                if answer_delta:
-                    streamed_answer = True
-                    streamed_answer_parts.append(answer_delta)
-                    yield {"type": "content", "delta": answer_delta}
+                if attempt_text.strip():
+                    response_text = attempt_text
+                    break
+                logger.warning(
+                    "LLM returned an empty stream request_id=%s iteration=%s empty_attempt=%s",
+                    request_id,
+                    i + 1,
+                    empty_attempt + 1,
+                )
+                if empty_attempt < 2:
+                    time.sleep(0.25 * (empty_attempt + 1))
             self._log_timing(
                 request_id,
                 "llm_iteration",
@@ -251,12 +264,11 @@ class ReactAgent(BaseAgent):
             )
             
             if not response_text:
-                if i == 0:
-                    yield {
-                        "type": "content",
-                        "delta": "抱歉，我暂时无法思考这个问题，请稍后再试。",
-                    }
-                break
+                yield {
+                    "type": "error",
+                    "message": "模型暂时没有生成有效回答，请稍后重试。",
+                }
+                return
 
             thought, action, action_input, final_answer = self._parse_output(response_text)
             
@@ -519,12 +531,27 @@ class ReactAgent(BaseAgent):
                 stream=True,
                 # 移除 stop 序列，让模型完整输出标签
             )
+            finish_reason = None
+            saw_reasoning_content = False
+            saw_content = False
             for chunk in response:
                 if not chunk.choices:
                     continue
-                content = chunk.choices[0].delta.content
+                choice = chunk.choices[0]
+                finish_reason = choice.finish_reason or finish_reason
+                saw_reasoning_content = saw_reasoning_content or bool(
+                    getattr(choice.delta, "reasoning_content", None)
+                )
+                content = choice.delta.content
                 if content:
+                    saw_content = True
                     yield content
+            logger.info(json.dumps({
+                "event": "llm_stream_complete",
+                "finish_reason": finish_reason,
+                "saw_content": saw_content,
+                "saw_reasoning_content": saw_reasoning_content,
+            }, ensure_ascii=False))
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
             raise
